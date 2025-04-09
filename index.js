@@ -1,6 +1,6 @@
-const fs = require("fs");
-const path = require("path");
-const xlsx = require("xlsx");
+import fs from "fs";
+import path from "path";
+import xlsx from "xlsx";
 
 // ======================================
 //  CONFIGURACIÓN DE RUTAS Y ARCHIVOS
@@ -18,7 +18,7 @@ const COLUMNA_EXPEDIENTE = "Expediente";
 // ======================================
 //  FUNCIÓN PARA LEER ARCHIVO XLSX
 // ======================================
-function leerExcel(rutaArchivo) {
+export function leerExcel(rutaArchivo) {
   try {
     const workbook = xlsx.readFile(rutaArchivo, { 
       cellDates: true,
@@ -37,7 +37,7 @@ function leerExcel(rutaArchivo) {
 //  FUNCIÓN PARA GUARDAR DATOS EN XLSX
 //  PRESERVANDO FORMATOS ORIGINALES
 // ======================================
-function guardarExcel(datos, rutaArchivo) {
+export function guardarExcel(datos, rutaArchivo) {
   try {
     // Crear workbook y convertir los datos a una hoja
     const workbook = xlsx.utils.book_new();
@@ -267,7 +267,7 @@ function obtenerExpediente(registro) {
 // ======================================
 //  PROCESO PRINCIPAL (SIMPLIFICADO Y RECONCILIADO)
 // ======================================
-function unirYSepararExcels() {
+export function unirYSepararExcels() {
   console.log("\n=== INICIANDO PROCESO DE CONSOLIDACIÓN ===\n");
   
   // Paso 1: Leer los archivos existentes
