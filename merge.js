@@ -5,11 +5,17 @@ import xlsx from "xlsx";
 // ======================================
 //  CONFIGURACIÓN DE RUTAS Y ARCHIVOS
 // ======================================
-const carpeta = path.join(process.env.HOME, "Desktop", "concentrado-crk");
-const archivoConcentrado = path.join(carpeta, "concentrado-general.xlsx");
-const archivoData = path.join(carpeta, "data.xlsx");
-const archivoReporte = path.join(carpeta, "reporte-merge.xlsx");
-const archivoBackup = path.join(carpeta, `concentrado-backup-${Date.now()}.xlsx`);
+// Cambio: Ruta base ahora apunta a la subcarpeta merge-general
+const carpetaBase = path.join(process.env.HOME, "Desktop", "concentrado-crk");
+const carpetaMerge = path.join(carpetaBase, "merge-general");
+
+// Los archivos ahora se buscan dentro de la carpeta de merge
+const archivoConcentrado = path.join(carpetaMerge, "concentrado-general.xlsx");
+const archivoData = path.join(carpetaMerge, "data.xlsx");
+const archivoReporte = path.join(carpetaMerge, "reporte-merge.xlsx");
+
+// El backup se guarda en la misma carpeta de merge
+const archivoBackup = path.join(carpetaMerge, `concentrado-backup-${Date.now()}.xlsx`);
 
 // ======================================
 //  CREAR BACKUP DEL CONCENTRADO
@@ -75,15 +81,28 @@ function leerExcel(rutaArchivo) {
 // ======================================
 function realizarMergeDirecto() {
   console.log("\n=== INICIANDO PROCESO DE MERGE DIRECTO ===\n");
+
+  // Verificar que exista la carpeta de merge
+  if (!fs.existsSync(carpetaMerge)) {
+    console.log(`Creando carpeta de merge: ${carpetaMerge}`);
+    try {
+      fs.mkdirSync(carpetaMerge, { recursive: true });
+    } catch (error) {
+      console.error(`Error al crear carpeta de merge: ${error.message}`);
+      return;
+    }
+  }
   
   // Verificar archivos
   if (!fs.existsSync(archivoConcentrado)) {
-    console.error("Error: El archivo concentrado-general.xlsx no existe");
+    console.error(`Error: El archivo concentrado ${archivoConcentrado} no existe`);
+    console.log("IMPORTANTE: Debe copiar primero el concentrado-general.xlsx a la carpeta merge-general");
     return;
   }
   
   if (!fs.existsSync(archivoData)) {
-    console.error("Error: El archivo data.xlsx no existe");
+    console.error(`Error: El archivo ${archivoData} no existe`);
+    console.log("IMPORTANTE: Debe colocar el archivo data.xlsx en la carpeta merge-general");
     return;
   }
   
@@ -297,6 +316,12 @@ function realizarMergeDirecto() {
   console.log(`Total registros en data.xlsx:       ${datosData.length}`);
   console.log(`Registros integrados correctamente: ${expedientesEncontrados}`);
   console.log(`Registros no integrados:            ${expedientesNoEncontrados}`);
+  console.log(`Reporte guardado en:                ${archivoReporte}`);
+  console.log("======================================");
+  console.log("\nIMPORTANTE: Si el proceso fue exitoso, debe copiar manualmente");
+  console.log(`el archivo concentrado actualizado a la carpeta principal:`);
+  console.log(`De: ${archivoConcentrado}`);
+  console.log(`A:  ${path.join(carpetaBase, "concentrado-general.xlsx")}`);
   console.log("======================================");
 }
 
