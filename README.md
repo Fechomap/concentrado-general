@@ -1,28 +1,28 @@
-# Concentrador de Archivos Excel
+# Concentrador Excel con Merge de Datos
 
-Este script permite consolidar múltiples archivos Excel (.xlsx) en un solo archivo, identificando y separando registros duplicados.
+Esta herramienta permite consolidar archivos Excel y realizar una fusión (merge) controlada con datos desde un archivo externo.
 
-## Descripción
+## Funcionalidades
 
-El script realiza las siguientes funciones:
+1. **Concentrador General**: Consolida múltiples archivos Excel en un único archivo, identificando duplicados.
+2. **Merge de Datos**: Integra información desde `data.xlsx` hacia el concentrado general, usando el número de expediente como identificador único.
 
-- Lee todos los archivos Excel (.xlsx) de una carpeta especificada.
-- Identifica registros duplicados (basados en la columna "Expediente").
-- Consolida todos los registros únicos en un archivo Excel general.
-- Guarda los registros duplicados en un archivo separado.
-- Preserva los formatos de fecha y hora originales.
-- Genera un reporte detallado del proceso.
+## Estructura del Proyecto
 
-## Requisitos Previos
+- `index.js`: Script principal para generar el concentrado general.
+- `merge-data.js`: Script para realizar el merge de datos desde `data.xlsx`.
+- `package.json`: Configuración del proyecto y scripts disponibles.
+
+## Requisitos
 
 - Node.js (versión 14 o superior)
-- npm (gestor de paquetes de Node.js)
+- Excel instalado para visualizar los resultados
 
 ## Instalación
 
-1. Clone o descargue este repositorio.
-2. Navegue a la carpeta del proyecto en su terminal.
-3. Instale las dependencias ejecutando:
+1. Clonar o descargar este repositorio
+2. Abrir una terminal en la carpeta del proyecto
+3. Instalar las dependencias:
 
 ```bash
 npm install
@@ -30,71 +30,59 @@ npm install
 
 ## Configuración
 
-Edite el archivo `index.js` para configurar las rutas y parámetros:
-
-```javascript
-// ======================================
-//  CONFIGURACIÓN DE RUTAS Y ARCHIVOS
-// ======================================
-const carpeta = path.join(process.env.HOME, "Desktop", "concentrado-crk");
-const archivoConcentrado = path.join(carpeta, "concentrado-general.xlsx");
-const archivoDuplicados = path.join(carpeta, "duplicados.xlsx");
-
-/**
- * Columna que identifica de forma única a cada expediente (columna A).
- * Ajuste este valor si su encabezado real es diferente.
- */
-const COLUMNA_EXPEDIENTE = "Expediente";
-```
-
-Ajuste estas variables según sus necesidades:
-
-- `carpeta`: Ruta donde se encuentran los archivos Excel a consolidar.
-- `archivoConcentrado`: Ruta donde se guardará el archivo consolidado.
-- `archivoDuplicados`: Ruta donde se guardarán los registros duplicados.
-- `COLUMNA_EXPEDIENTE`: Nombre de la columna que sirve como identificador único.
+1. Crear una carpeta llamada `concentrado-crk` en el Escritorio (Desktop)
+2. Colocar los archivos Excel a consolidar en esta carpeta
+3. Asegurarse de que `data.xlsx` esté en la misma carpeta
 
 ## Uso
 
-1. Asegúrese de que todos los archivos Excel (.xlsx) a consolidar estén en la carpeta configurada.
-2. Ejecute el script con:
+### Generar solo el Concentrado General
 
 ```bash
 npm start
 ```
 
-O alternativamente:
+### Realizar solo el Merge de Datos
 
 ```bash
-node index.js
+npm run merge
 ```
 
-3. El script generará dos archivos:
-   - `concentrado-general.xlsx`: Contiene todos los registros únicos.
-   - `duplicados.xlsx`: Contiene los registros duplicados.
+### Proceso Completo (Concentrado + Merge)
 
-## Comportamiento del Script
+```bash
+npm run complete
+```
 
-- Si un registro aparece en múltiples archivos, se mantiene la última versión encontrada en el concentrado general.
-- Los duplicados son:
-  1. Registros con el mismo identificador que aparecen más de una vez en el mismo archivo.
-  2. Registros que ya estaban marcados como duplicados en una ejecución anterior.
-- El script preservará los formatos de fecha (dd/mm/yyyy) y hora (hh:mm:ss) en las columnas correspondientes.
+## Proceso de Merge
 
-## Características Especiales
+El script `merge-data.js` realiza lo siguiente:
 
-- **Formatos Preservados**: El script detecta automáticamente columnas de fecha y hora y aplica el formato adecuado.
-- **Normalización de Datos**: Elimina espacios en blanco extra y estandariza los datos.
-- **Detección Robusta de Fechas y Horas**: Admite múltiples formatos de entrada.
-- **Reconciliación de Totales**: Verifica que la suma de registros sea correcta.
-- **Persistencia de Duplicados**: Mantiene el registro de duplicados entre ejecuciones.
+1. Lee el archivo `data.xlsx` y el concentrado general.
+2. Busca coincidencias de expedientes entre ambos archivos:
+   - El número de expediente se toma de la columna D (4) en `data.xlsx`.
+   - Se busca coincidencia exacta en la columna A del concentrado general.
+3. Para cada coincidencia, inserta los datos desde la columna AW (49) del concentrado.
+4. Genera un reporte detallado de la operación.
+5. Registra los expedientes procesados para evitar duplicidades en futuras ejecuciones.
+
+## Archivos Generados
+
+- `concentrado-general.xlsx`: Archivo con todos los registros consolidados y datos fusionados.
+- `duplicados.xlsx`: Registros identificados como duplicados.
+- `reporte-merge.xlsx`: Reporte detallado del proceso de merge.
+- `registros-procesados.json`: Registro interno de expedientes ya procesados.
+
+## Notas Importantes
+
+- El merge solo integra registros si el número de expediente coincide exactamente.
+- Los registros ya procesados se almacenan para evitar duplicaciones si se ejecuta el script varias veces.
+- El reporte detalla qué registros se integraron y cuáles no, con el motivo correspondiente.
 
 ## Solución de Problemas
 
-- **Error de archivo no encontrado**: Asegúrese de que la carpeta configurada existe en la ruta especificada.
-- **Error al leer los archivos**: Verifique que los archivos Excel no estén abiertos en otra aplicación.
-- **Diferencia en totales**: Puede ocurrir si hay registros sin el identificador único. Revise los datos originales.
+Si encuentra problemas durante la ejecución:
 
-## Licencia
-
-ISC
+1. Verifique que los archivos estén en la ubicación correcta.
+2. Revise que el formato de los números de expediente sea consistente entre ambos archivos.
+3. Para reiniciar el proceso de merge desde cero, elimine el archivo `registros-procesados.json`.
