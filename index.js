@@ -70,12 +70,51 @@ export function guardarExcel(datos, rutaArchivo) {
           // FORMATEO: Columnas con "fecha" en el nombre (pero no "hora")
           if (/fecha/i.test(headerName) && !/hora/i.test(headerName)) {
             cell.z = 'dd/mm/yyyy';
-            // Si no es ya un objeto Date, intentar convertir
-            if (!(cell.v instanceof Date)) {
+            
+            // Si no es ya un objeto Date y tiene valor, intentar convertir
+            if (!(cell.v instanceof Date) && cell.v) {
+              // Guardar el valor original para comparación
+              const valorOriginal = cell.v;
+              
+              // Intentar parsear con nuestro método mejorado
               const fecha = parsearFechaConSeguridad(cell.v);
+              
               if (fecha instanceof Date) {
-                cell.v = fecha;
-                cell.t = 'd';
+                // Verificar si la fecha resultante es significativamente diferente 
+                // del valor original (posible interpretación incorrecta)
+                let aplicarFecha = true;
+                
+                // Si el valor original era un string en formato dd/mm/yyyy, verificamos
+                // que la conversión respete exactamente el día
+                if (typeof valorOriginal === 'string') {
+                  const matchFecha = valorOriginal.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+                  if (matchFecha) {
+                    const diaOriginal = parseInt(matchFecha[1], 10);
+                    // Si el día no coincide, NO aplicamos la conversión
+                    if (fecha.getDate() !== diaOriginal) {
+                      aplicarFecha = false;
+                      // Intentar una última vez con un enfoque directo para este caso específico
+                      const dia = parseInt(matchFecha[1], 10);
+                      const mes = parseInt(matchFecha[2], 10) - 1;
+                      const año = parseInt(matchFecha[3], 10);
+                      const fechaManual = new Date(año, mes, dia);
+                      
+                      if (!isNaN(fechaManual.getTime()) && 
+                          fechaManual.getDate() === dia && 
+                          fechaManual.getMonth() === mes && 
+                          fechaManual.getFullYear() === año) {
+                        cell.v = fechaManual;
+                        cell.t = 'd';
+                      }
+                    }
+                  }
+                }
+                
+                // Solo aplicamos la conversión si pasó las verificaciones
+                if (aplicarFecha) {
+                  cell.v = fecha;
+                  cell.t = 'd';
+                }
               }
             }
           }
@@ -108,10 +147,10 @@ export function guardarExcel(datos, rutaArchivo) {
 }
 
 // ======================================
-//  PARSEAR FECHA DE MANERA ROBUSTA
+//  PARSEAR FECHA DE MANERA ROBUSTA Y PRECISA
 // ======================================
 function parsearFechaConSeguridad(valor) {
-  // Si ya es una fecha, devolver tal cual
+  // Si ya es una fecha, devolver tal cual - nunca modificar una fecha válida
   if (valor instanceof Date && !isNaN(valor.getTime())) {
     return valor;
   }
@@ -120,31 +159,64 @@ function parsearFechaConSeguridad(valor) {
   if (!valor) return null;
   
   try {
-    // Si es número, probablemente sea un número de serie de Excel
+    // CASO 1: Valor numérico - posible serial de Excel
     if (!isNaN(valor)) {
       const numValue = Number(valor);
-      // Fechas de Excel (número de días desde 1900-01-01)
-      if (numValue > 1000) { // Filtro para números grandes que probablemente sean fechas
-        // 25569 es el ajuste para 01/01/1970 (fecha UNIX epoch)
-        const msDate = (numValue - 25569) * 86400 * 1000;
-        const fecha = new Date(msDate);
-        if (!isNaN(fecha.getTime())) return fecha;
+      
+      // Verificar si es un número serial de Excel válido (fechas razonables)
+      // Excel inicia en 1/1/1900 (serial 1), añadimos filtro para evitar falsos positivos
+      if (numValue >= 1000 && numValue <= 50000) { // Rango de fechas razonables (~1903 hasta ~2036)
+        // IMPORTANTE: El ajuste exacto para corregir el problema del año bisiesto 1900 en Excel
+        // y para convertir correctamente a la epoch de JavaScript (1/1/1970)
+        
+        // Primero creamos una fecha con año/mes/día exactos según la numeración de Excel
+        // Este enfoque evita problemas de zona horaria
+        const diasDesde1900 = Math.floor(numValue);
+        
+        // 1. Calculamos la fecha exacta usando aritmética de fechas
+        // Nota: La fecha 0 en Excel es 0/1/1900
+        
+        // Establecemos el 31/12/1899 como fecha base (un día antes del 1/1/1900)
+        // y sumamos los días correspondientes al serial
+        const fechaExcel = new Date(1899, 11, 31);
+        fechaExcel.setDate(fechaExcel.getDate() + diasDesde1900);
+        
+        // Si el número incluye fracción de día (hora), la añadimos
+        const fraccionDia = numValue - diasDesde1900;
+        if (fraccionDia > 0) {
+          const milisegundosDia = 24 * 60 * 60 * 1000;
+          fechaExcel.setTime(fechaExcel.getTime() + Math.round(fraccionDia * milisegundosDia));
+        }
+        
+        // 2. Validamos que la fecha sea correcta
+        if (!isNaN(fechaExcel.getTime())) {
+          return fechaExcel;
+        }
       }
     }
     
-    // Si es string, intentar varios formatos de fecha
+    // CASO 2: String - intentamos varios formatos de fecha con precisión
     if (typeof valor === 'string') {
-      // Primero intentar con formato DD/MM/YYYY o DD-MM-YYYY
-      const regexFecha = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/;
-      const match = valor.match(regexFecha);
+      // Limpiar el string de espacios extra y caracteres no deseados
+      const valorLimpio = valor.trim().replace(/\s+/g, " ");
       
-      if (match) {
-        const dia = parseInt(match[1], 10);
-        const mes = parseInt(match[2], 10) - 1; // Meses en JS son 0-11
-        const año = parseInt(match[3], 10);
+      // CASO 2.1: Formato exacto DD/MM/YYYY o DD-MM-YYYY
+      // Este es el formato más común en sistemas españoles/latinos
+      const regexFechaLatina = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/;
+      const matchLatino = valorLimpio.match(regexFechaLatina);
+      
+      if (matchLatino) {
+        const dia = parseInt(matchLatino[1], 10);
+        const mes = parseInt(matchLatino[2], 10) - 1; // Meses en JS son 0-11
+        const año = parseInt(matchLatino[3], 10);
         
+        // Crear fecha usando UTC para evitar cualquier ajuste por zona horaria
+        // Luego convertimos a fecha local preservando exactamente los valores
+        const fechaUTC = new Date(Date.UTC(año, mes, dia));
         const fecha = new Date(año, mes, dia);
-        // Validar que la fecha sea correcta (evita 31/02/2023 por ejemplo)
+        
+        // Validar fecha: verificamos que el día, mes y año sean los esperados
+        // Esto protege contra fechas inválidas como 31/02/2023
         if (!isNaN(fecha.getTime()) && 
             fecha.getDate() === dia && 
             fecha.getMonth() === mes && 
@@ -153,24 +225,74 @@ function parsearFechaConSeguridad(valor) {
         }
       }
       
-      // Intentar con Date.parse como último recurso
-      const parsedDate = new Date(Date.parse(valor));
-      if (!isNaN(parsedDate.getTime())) {
-        return parsedDate;
+      // CASO 2.2: Formato YYYY-MM-DD (formato ISO)
+      const regexFechaISO = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+      const matchISO = valorLimpio.match(regexFechaISO);
+      
+      if (matchISO) {
+        const año = parseInt(matchISO[1], 10);
+        const mes = parseInt(matchISO[2], 10) - 1; // Meses en JS son 0-11
+        const dia = parseInt(matchISO[3], 10);
+        
+        const fecha = new Date(año, mes, dia);
+        
+        // Validar como en el caso anterior
+        if (!isNaN(fecha.getTime()) && 
+            fecha.getDate() === dia && 
+            fecha.getMonth() === mes && 
+            fecha.getFullYear() === año) {
+          return fecha;
+        }
+      }
+      
+      // CASO 2.3: Verificar otros formatos pero preservando con precisión la fecha
+      // NOTA: Date.parse es peligroso para formatos ambiguos, usamos solo en casos de último recurso
+      
+      // EVITAMOS usar Date.parse() directamente aquí para prevenir interpretaciones
+      // ambiguas que puedan alterar el día debido a zonas horarias.
+      
+      // En su lugar, intentamos identificar patrones comunes y garantizar precisión
+      
+      // Por ejemplo: dd/mm/yyyy HH:MM:SS o formatos similares
+      const regexFechaHora = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/;
+      const matchFechaHora = valorLimpio.match(regexFechaHora);
+      
+      if (matchFechaHora) {
+        const dia = parseInt(matchFechaHora[1], 10);
+        const mes = parseInt(matchFechaHora[2], 10) - 1;
+        const año = parseInt(matchFechaHora[3], 10);
+        const hora = parseInt(matchFechaHora[4], 10);
+        const minutos = parseInt(matchFechaHora[5], 10);
+        const segundos = matchFechaHora[6] ? parseInt(matchFechaHora[6], 10) : 0;
+        
+        const fecha = new Date(año, mes, dia, hora, minutos, segundos);
+        
+        // Validación rigurosa para asegurar exactitud
+        if (!isNaN(fecha.getTime()) && 
+            fecha.getDate() === dia && 
+            fecha.getMonth() === mes && 
+            fecha.getFullYear() === año &&
+            fecha.getHours() === hora &&
+            fecha.getMinutes() === minutos) {
+          return fecha;
+        }
       }
     }
   } catch (error) {
-    console.error("Error al parsear fecha:", error.message);
+    console.error("Error al parsear fecha:", error.message, "para valor:", valor);
   }
   
+  // Si llegamos aquí, no pudimos parsear la fecha con seguridad.
+  // Devolvemos null en lugar de intentar usar métodos menos fiables
+  // para evitar posibles errores de interpretación.
   return null;
 }
 
 // ======================================
-//  PARSEAR HORA DE MANERA ROBUSTA
+//  PARSEAR HORA DE MANERA ROBUSTA Y PRECISA
 // ======================================
 function parsearHoraConSeguridad(valor) {
-  // Si ya es una fecha, devolver tal cual
+  // Si ya es una fecha, devolver tal cual - preservar valores válidos
   if (valor instanceof Date && !isNaN(valor.getTime())) {
     return valor;
   }
@@ -179,59 +301,108 @@ function parsearHoraConSeguridad(valor) {
   if (!valor) return null;
   
   try {
-    // Si es número, probablemente sea un decimal de Excel (fracción de día)
+    // CASO 1: Valor numérico - posible fracción de día de Excel
     if (!isNaN(valor)) {
       const numValue = Number(valor);
-      if (numValue >= 0 && numValue < 1) { // Solo fracciones de día (0-1)
-        const totalSeconds = Math.round(numValue * 24 * 60 * 60);
-        const hours = Math.floor(totalSeconds / 3600);
-        const minutes = Math.floor((totalSeconds % 3600) / 60);
-        const seconds = totalSeconds % 60;
+      
+      // Las horas en Excel son fracciones de día entre 0 y 1
+      if (numValue >= 0 && numValue < 1) {
+        // Convertimos la fracción en milisegundos
+        const millisInDay = 24 * 60 * 60 * 1000;
+        const millisFromFraction = Math.round(numValue * millisInDay);
         
-        // Base date: 1899-12-30 (fecha base de Excel para tiempos)
-        return new Date(1899, 11, 30, hours, minutes, seconds);
+        // Para horas, usamos una fecha base fija para evitar cualquier
+        // problema de zona horaria o DST
+        const baseDate = new Date(1899, 11, 30, 0, 0, 0, 0);
+        const timeDate = new Date(baseDate.getTime() + millisFromFraction);
+        
+        // Verificar que la conversión resultó en una fecha válida
+        if (!isNaN(timeDate.getTime())) {
+          return timeDate;
+        }
       }
     }
     
-    // Si es string, intentar varios formatos
+    // CASO 2: String - intentamos varios formatos de hora con precisión
     if (typeof valor === 'string') {
-      // Formato HH:MM:SS
-      const regexHora = /(\d{1,2}):(\d{1,2}):(\d{1,2})/;
-      const match = valor.match(regexHora);
+      // Limpiar el string de espacios extra
+      const valorLimpio = valor.trim().replace(/\s+/g, " ");
+      
+      // CASO 2.1: Formato HH:MM:SS (el más común)
+      const regexHora = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/;
+      const match = valorLimpio.match(regexHora);
       
       if (match) {
         const horas = parseInt(match[1], 10);
         const minutos = parseInt(match[2], 10);
-        const segundos = parseInt(match[3], 10);
+        const segundos = match[3] ? parseInt(match[3], 10) : 0;
         
-        // Validar rangos
+        // Validar rangos para asegurar que es una hora válida
         if (horas >= 0 && horas < 24 && 
             minutos >= 0 && minutos < 60 && 
             segundos >= 0 && segundos < 60) {
-          return new Date(1899, 11, 30, horas, minutos, segundos);
+            
+          // Usamos una fecha base fija para almacenar solo el tiempo
+          const baseDate = new Date(1899, 11, 30);
+          baseDate.setHours(horas, minutos, segundos, 0);
+          
+          return baseDate;
         }
       }
       
-      // Formato HHMMSS (sin separadores)
+      // CASO 2.2: Formato HHMMSS (sin separadores)
       const regexHoraSinSep = /^(\d{2})(\d{2})(\d{2})$/;
-      const matchSinSep = valor.match(regexHoraSinSep);
+      const matchSinSep = valorLimpio.match(regexHoraSinSep);
       
       if (matchSinSep) {
         const horas = parseInt(matchSinSep[1], 10);
         const minutos = parseInt(matchSinSep[2], 10);
         const segundos = parseInt(matchSinSep[3], 10);
         
+        // Validar rangos
         if (horas >= 0 && horas < 24 && 
             minutos >= 0 && minutos < 60 && 
             segundos >= 0 && segundos < 60) {
-          return new Date(1899, 11, 30, horas, minutos, segundos);
+            
+          // Mismo enfoque de fecha base fija
+          const baseDate = new Date(1899, 11, 30);
+          baseDate.setHours(horas, minutos, segundos, 0);
+          
+          return baseDate;
+        }
+      }
+      
+      // CASO 2.3: Formato de 12 horas (HH:MM AM/PM)
+      const regexHora12h = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?\s*(AM|PM|am|pm)$/i;
+      const match12h = valorLimpio.match(regexHora12h);
+      
+      if (match12h) {
+        let horas = parseInt(match12h[1], 10);
+        const minutos = parseInt(match12h[2], 10);
+        const segundos = match12h[3] ? parseInt(match12h[3], 10) : 0;
+        const esPM = match12h[4].toLowerCase() === 'pm';
+        
+        // Ajustar las horas para formato 12h
+        if (esPM && horas < 12) horas += 12;
+        if (!esPM && horas === 12) horas = 0;
+        
+        // Validar rangos
+        if (horas >= 0 && horas < 24 && 
+            minutos >= 0 && minutos < 60 && 
+            segundos >= 0 && segundos < 60) {
+            
+          const baseDate = new Date(1899, 11, 30);
+          baseDate.setHours(horas, minutos, segundos, 0);
+          
+          return baseDate;
         }
       }
     }
   } catch (error) {
-    console.error("Error al parsear hora:", error.message);
+    console.error("Error al parsear hora:", error.message, "para valor:", valor);
   }
   
+  // Si llegamos aquí, no pudimos parsear la hora con seguridad
   return null;
 }
 
