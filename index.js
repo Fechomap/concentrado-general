@@ -265,7 +265,7 @@ function obtenerExpediente(registro) {
 }
 
 // ======================================
-//  PROCESO PRINCIPAL (SIMPLIFICADO Y RECONCILIADO)
+//  PROCESO PRINCIPAL (ACUMULATIVO Y RECONCILIADO)
 // ======================================
 export function unirYSepararExcels() {
   console.log("\n=== INICIANDO PROCESO DE CONSOLIDACIÓN ===\n");
@@ -288,7 +288,7 @@ export function unirYSepararExcels() {
   }
   
   // Paso 2: Leer todos los archivos de origen
-  console.log("\nLeyendo archivos de origen...");
+  console.log("\nVerificando archivos de origen...");
   
   // Excluir archivos temporales y los archivos de salida
   const tempFileRegex = /^[~$].+/;
@@ -301,12 +301,41 @@ export function unirYSepararExcels() {
   
   console.log(`   - Encontrados ${archivosEntrada.length} archivos fuente.`);
   
-  // Lectura simple: todos los registros de todos los archivos
+  // Inicializar estructuras de datos para el procesamiento
   const registrosPorArchivo = new Map();
   const contadorExpedientes = new Map();
   const registroMasRecientePorExpediente = new Map();
   
   let totalRegistrosLeidos = 0;
+  let registrosExistentesMantenidos = 0;
+  
+  // NUEVO: Cargar registros del concentrado existente si existe
+  if (fs.existsSync(archivoConcentrado)) {
+    console.log("\nCargando registros del concentrado existente...");
+    const registrosConcentrado = leerExcel(archivoConcentrado);
+    
+    for (const reg of registrosConcentrado) {
+      const registro = normalizarRegistro(reg);
+      const expediente = obtenerExpediente(registro);
+      
+      if (expediente) {
+        // Agregar al mapa de registros más recientes
+        registroMasRecientePorExpediente.set(expediente, registro);
+        registrosExistentesMantenidos++;
+      }
+    }
+    
+    console.log(`   - Cargados ${registrosExistentesMantenidos} registros de concentrado existente.`);
+    
+    // Si no hay archivos nuevos para procesar, terminamos sin cambios
+    if (archivosEntrada.length === 0) {
+      console.log("\nNo hay archivos fuente nuevos para procesar. El concentrado se mantiene sin cambios.");
+      return;
+    }
+  }
+  
+  // Paso 3: Leer todos los archivos de origen
+  console.log("\nLeyendo archivos de origen...");
   
   for (const nombreArchivo of archivosEntrada) {
     const rutaArchivo = path.join(carpeta, nombreArchivo);
@@ -345,12 +374,13 @@ export function unirYSepararExcels() {
     totalRegistrosLeidos += registros.length;
   }
   
-  // Total de expedientes únicos (después de eliminar duplicados)
-  const expedientesUnicos = new Set(contadorExpedientes.keys());
-  console.log(`   - Total registros leídos: ${totalRegistrosLeidos}`);
+  // Total de expedientes únicos (todos los que están en el mapa de registros más recientes)
+  const expedientesUnicos = new Set(registroMasRecientePorExpediente.keys());
+  console.log(`   - Total registros leídos de archivos fuente: ${totalRegistrosLeidos}`);
   console.log(`   - Total expedientes únicos: ${expedientesUnicos.size}`);
+  console.log(`   - Registros existentes mantenidos: ${registrosExistentesMantenidos}`);
   
-  // Paso 3: Detectar duplicados dentro de los mismos archivos
+  // Paso 4: Detectar duplicados dentro de los mismos archivos
   console.log("\nDetectando duplicados reales dentro de cada archivo...");
   
   // Para cada archivo, detectamos duplicados
@@ -384,7 +414,7 @@ export function unirYSepararExcels() {
     console.log(`   - ${nombreArchivo}: ${duplicadosEnEsteArchivo} duplicados internos.`);
   }
   
-  // Paso 4: Preparar el concentrado y los duplicados
+  // Paso 5: Preparar el concentrado y los duplicados
   console.log("\nPreparando concentrado general y lista de duplicados...");
   
   // Todos los expedientes van al concentrado (versión más reciente)
@@ -411,7 +441,7 @@ export function unirYSepararExcels() {
     }
   }
   
-  // Paso 5: Guardar archivos finales
+  // Paso 6: Guardar archivos finales
   console.log("\nGuardando archivos finales...");
   
   console.log(`   - Guardando ${registrosConcentrado.length} registros en concentrado...`);
@@ -420,7 +450,7 @@ export function unirYSepararExcels() {
   console.log(`   - Guardando ${registrosDuplicados.length} registros en duplicados...`);
   const resultadoDuplicados = guardarExcel(registrosDuplicados, archivoDuplicados);
   
-  // Paso 6: Generar reporte final con reconciliación de totales
+  // Paso 7: Generar reporte final con reconciliación de totales
   generarReporteFinal({
     archivosEntrada,
     totalRegistrosLeidos,
@@ -429,6 +459,7 @@ export function unirYSepararExcels() {
     totalDuplicados: registrosDuplicados.length,
     duplicadosNuevos,
     duplicadosYaRegistrados,
+    registrosExistentesMantenidos,
     resultadoConcentrado,
     resultadoDuplicados
   });
@@ -445,6 +476,7 @@ function generarReporteFinal({
   totalDuplicados,
   duplicadosNuevos,
   duplicadosYaRegistrados,
+  registrosExistentesMantenidos = 0,
   resultadoConcentrado,
   resultadoDuplicados
 }) {
@@ -468,6 +500,8 @@ function generarReporteFinal({
   console.log(`Expedientes únicos:             ${totalExpedientesUnicos}`);
   console.log(`Duplicados en registros leídos: ${diferenciaTotal}`);
   console.log(`Expedientes en concentrado:     ${totalConcentrado}`);
+  console.log(`  - Registros mantenidos:       ${registrosExistentesMantenidos}`);
+  console.log(`  - Registros nuevos/actualizados: ${totalConcentrado - registrosExistentesMantenidos}`);
   console.log(`Expedientes en duplicados:      ${totalDuplicados}`);
   console.log(`  - Duplicados nuevos:          ${duplicadosNuevos}`);
   console.log(`  - Duplicados ya registrados:  ${duplicadosYaRegistrados}`);
