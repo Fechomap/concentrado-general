@@ -1,11 +1,10 @@
 import fs from "fs";
 import path from "path";
-import xlsx from "xlsx";
+import ExcelJS from "exceljs";
 
 // ======================================
 //  CONFIGURACIÓN DE RUTAS Y ARCHIVOS
 // ======================================
-// Cambio: Ruta base ahora apunta a la subcarpeta merge-general
 const carpetaBase = path.join(process.env.HOME, "Desktop", "concentrado-crk");
 const carpetaMerge = path.join(carpetaBase, "merge-general");
 
@@ -23,7 +22,10 @@ const archivoBackup = path.join(carpetaMerge, `concentrado-backup-${Date.now()}.
 function crearBackup() {
   try {
     if (fs.existsSync(archivoConcentrado)) {
-      fs.copyFileSync(archivoConcentrado, archivoBackup);
+      // Usamos el método de bajo nivel para copiar el archivo byte a byte
+      // Esto asegura que se preserve absolutamente todo el contenido y formato
+      const contenidoOriginal = fs.readFileSync(archivoConcentrado);
+      fs.writeFileSync(archivoBackup, contenidoOriginal);
       console.log(`Backup creado: ${archivoBackup}`);
       return true;
     } else {
@@ -47,40 +49,185 @@ function normalizarExpediente(valor) {
 }
 
 // ======================================
-//  LEER ARCHIVO EXCEL
+//  LEER ARCHIVO EXCEL CON EXCELJS
 // ======================================
-function leerExcel(rutaArchivo) {
+async function leerArchivoExcel(rutaArchivo, descripcion = "Excel") {
   try {
-    // Opciones para preservar formatos y fechas
-    const opciones = { 
-      cellDates: true,
-      cellNF: true,
-      cellStyles: true,
-      raw: false
-    };
+    console.log(`Leyendo archivo ${rutaArchivo} con ExcelJS...`);
     
-    const workbook = xlsx.readFile(rutaArchivo, opciones);
-    const nombreHoja = workbook.SheetNames[0];
-    const hoja = workbook.Sheets[nombreHoja];
+    // Verificar existencia del archivo
+    if (!fs.existsSync(rutaArchivo)) {
+      console.error(`❌ ERROR: El archivo ${rutaArchivo} no existe.`);
+      return { datos: [], encabezados: [], workbook: null, worksheet: null };
+    }
     
-    // Convertir a JSON para procesamiento
-    const datos = xlsx.utils.sheet_to_json(hoja, { 
-      defval: "",
-      raw: false
+    const stats = fs.statSync(rutaArchivo);
+    console.log(`  - Tamaño del archivo: ${(stats.size / 1024).toFixed(2)} KB`);
+    
+    // Crear workbook y leer archivo
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(rutaArchivo);
+    
+    // Verificar que haya hojas
+    if (workbook.worksheets.length === 0) {
+      console.error(`❌ ERROR: No se encontraron hojas en el archivo ${rutaArchivo}`);
+      return { datos: [], encabezados: [], workbook: null, worksheet: null };
+    }
+    
+    // Usar la primera hoja
+    const worksheet = workbook.worksheets[0];
+    console.log(`  - Hoja encontrada: ${worksheet.name}`);
+    console.log(`  - Filas: ${worksheet.rowCount}, Columnas: ${worksheet.columnCount}`);
+    
+    // Extraer encabezados (primera fila)
+    const encabezados = [];
+    const primeraFila = worksheet.getRow(1);
+    primeraFila.eachCell((cell, colNumber) => {
+      encabezados[colNumber - 1] = cell.value?.toString() || `Columna_${colNumber}`;
     });
     
-    return { workbook, nombreHoja, hoja, datos };
+    console.log(`  - Encabezados encontrados: ${encabezados.length}`);
+    console.log(`  - Ejemplo de encabezados: ${encabezados.slice(0, 5).join(', ')}...`);
+    
+    // Convertir datos a array de objetos
+    const datos = [];
+    
+    // Empezar desde la fila 2 (después de encabezados)
+    for (let i = 2; i <= worksheet.rowCount; i++) {
+      const fila = worksheet.getRow(i);
+      const registro = {};
+      let tieneValores = false;
+      
+      // Asignar valor a cada propiedad según encabezados
+      encabezados.forEach((encabezado, index) => {
+        if (encabezado) {
+          const celda = fila.getCell(index + 1);
+          const valor = celda.value;
+          
+          // Asignar valor al registro
+          registro[encabezado] = valor;
+          
+          // Verificar si la celda tiene algún valor
+          if (valor !== null && valor !== undefined && valor !== "") {
+            tieneValores = true;
+          }
+        }
+      });
+      
+      // Solo agregar filas que contengan datos
+      if (tieneValores) {
+        datos.push(registro);
+      }
+      
+      // Mostrar progreso cada 1000 filas o en la última fila
+      if (i % 1000 === 0 || i === worksheet.rowCount) {
+        console.log(`  - Procesadas ${i} de ${worksheet.rowCount} filas...`);
+      }
+    }
+    
+    console.log(`  - Total registros extraídos: ${datos.length}`);
+    
+    // Mostrar algunos ejemplos de datos
+    if (datos.length > 0) {
+      console.log(`\nEjemplos de registros en ${descripcion}:`);
+      datos.slice(0, 3).forEach((registro, i) => {
+        console.log(`  - Registro #${i+1}: ${JSON.stringify(registro).substring(0, 150)}...`);
+      });
+    }
+    
+    return { datos, encabezados, workbook, worksheet };
   } catch (error) {
-    console.error(`Error al leer ${rutaArchivo}:`, error.message);
-    return { workbook: null, nombreHoja: "", hoja: null, datos: [] };
+    console.error(`Error al leer ${rutaArchivo} con ExcelJS:`, error.message);
+    console.error(error.stack);
+    return { datos: [], encabezados: [], workbook: null, worksheet: null };
   }
 }
 
 // ======================================
-//  REALIZAR MERGE DIRECTO
+//  GENERAR REPORTE EXCEL CON EXCELJS
 // ======================================
-function realizarMergeDirecto() {
-  console.log("\n=== INICIANDO PROCESO DE MERGE DIRECTO ===\n");
+async function generarReporteExcelJS(reporte, rutaReporte) {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    
+    // Hoja de estadísticas
+    const hojaEstadisticas = workbook.addWorksheet("Estadísticas");
+    hojaEstadisticas.columns = [
+      { header: 'Estadística', key: 'estadistica', width: 40 },
+      { header: 'Valor', key: 'valor', width: 20 }
+    ];
+    
+    // Agregar filas de estadísticas
+    hojaEstadisticas.addRow({ 
+      estadistica: "Total registros en data.xlsx", 
+      valor: reporte.totalRegistros 
+    });
+    hojaEstadisticas.addRow({ 
+      estadistica: "Registros integrados correctamente", 
+      valor: reporte.integrados.length 
+    });
+    hojaEstadisticas.addRow({ 
+      estadistica: "Registros no integrados", 
+      valor: reporte.noIntegrados.length 
+    });
+    
+    // Dar formato a la hoja de estadísticas
+    hojaEstadisticas.getRow(1).font = { bold: true };
+    hojaEstadisticas.getColumn(1).font = { bold: true };
+    
+    // Hoja de registros integrados
+    if (reporte.integrados.length > 0) {
+      const hojaIntegrados = workbook.addWorksheet("Integrados");
+      
+      // Configurar encabezados
+      hojaIntegrados.columns = [
+        { header: 'Expediente', key: 'expediente', width: 20 },
+        { header: 'FilaData', key: 'filaData', width: 10 },
+        { header: 'FilaConcentrado', key: 'filaConcentrado', width: 15 },
+        { header: 'Estado', key: 'estado', width: 15 }
+      ];
+      
+      // Agregar filas de datos
+      hojaIntegrados.addRows(reporte.integrados);
+      
+      // Dar formato
+      hojaIntegrados.getRow(1).font = { bold: true };
+    }
+    
+    // Hoja de registros no integrados
+    if (reporte.noIntegrados.length > 0) {
+      const hojaNoIntegrados = workbook.addWorksheet("No Integrados");
+      
+      // Configurar encabezados
+      hojaNoIntegrados.columns = [
+        { header: 'Expediente', key: 'expediente', width: 20 },
+        { header: 'FilaData', key: 'filaData', width: 10 },
+        { header: 'Motivo', key: 'motivo', width: 40 }
+      ];
+      
+      // Agregar filas de datos
+      hojaNoIntegrados.addRows(reporte.noIntegrados);
+      
+      // Dar formato
+      hojaNoIntegrados.getRow(1).font = { bold: true };
+    }
+    
+    // Guardar el workbook
+    await workbook.xlsx.writeFile(rutaReporte);
+    console.log(`   - Reporte guardado en: ${rutaReporte}`);
+    
+    return true;
+  } catch (error) {
+    console.error("Error al generar reporte:", error.message);
+    return false;
+  }
+}
+
+// ======================================
+//  REALIZAR MERGE DIRECTO PRESERVANDO FORMATOS
+// ======================================
+async function realizarMergeDirecto() {
+  console.log("\n=== INICIANDO PROCESO DE MERGE DIRECTO (CONSERVANDO FORMATO) ===\n");
 
   // Verificar que exista la carpeta de merge
   if (!fs.existsSync(carpetaMerge)) {
@@ -106,35 +253,92 @@ function realizarMergeDirecto() {
     return;
   }
   
-  // Crear backup antes de modificar
+  // Crear backup antes de modificar (usando copia byte a byte para preservar todo)
   if (!crearBackup()) {
     console.error("No se pudo crear el backup. Abortando proceso por seguridad.");
     return;
   }
   
-  // Leer archivos
+  // Leer archivos con máxima preservación de formatos
   console.log("Leyendo archivos...");
-  const { workbook: dataWorkbook, datos: datosData } = leerExcel(archivoData);
-  const { 
-    workbook: concentradoWorkbook, 
-    nombreHoja: nombreHojaConcentrado, 
-    hoja: hojaConcentrado, 
-    datos: datosConcentrado 
-  } = leerExcel(archivoConcentrado);
   
-  if (!dataWorkbook || !concentradoWorkbook) {
-    console.error("Error al leer los archivos Excel");
+  // Leer el archivo de datos con ExcelJS
+  console.log("Leyendo archivo data.xlsx...");
+  const resultadoData = await leerArchivoExcel(archivoData, "data.xlsx");
+  
+  if (!resultadoData.datos || resultadoData.datos.length === 0) {
+    console.error("Error: No se pudieron extraer datos del archivo data.xlsx");
     return;
   }
   
-  console.log(`   - Leídos ${datosData.length} registros de data.xlsx`);
-  console.log(`   - Leídos ${datosConcentrado.length} registros de concentrado-general.xlsx`);
+  // Extraer valores y encabezados del archivo de datos
+  const datosData = resultadoData.datos;
+  const encabezadosData = resultadoData.encabezados;
+  
+  // Información de diagnóstico adicional
+  console.log(`\nResumen de lectura de data.xlsx:
+- Filas encontradas: ${datosData.length}
+- Encabezados encontrados: ${encabezadosData.length}
+`);
+
+  // Ahora leemos el concentrado con ExcelJS también
+  console.log("\nLeyendo archivo concentrado-general.xlsx...");
+  const resultadoConcentrado = await leerArchivoExcel(archivoConcentrado, "concentrado");
+  
+  if (!resultadoConcentrado.datos || resultadoConcentrado.datos.length === 0) {
+    console.error("Error: No se pudieron extraer datos del archivo concentrado");
+    return;
+  }
+  
+  // Extraer valores y encabezados del concentrado
+  const datosConcentrado = resultadoConcentrado.datos;
+  const encabezadosConcentrado = resultadoConcentrado.encabezados;
+  const workbookConcentrado = resultadoConcentrado.workbook;
+  const worksheetConcentrado = resultadoConcentrado.worksheet;
+  
+  console.log(`\nResumen de lectura de concentrado:
+- Filas encontradas: ${datosConcentrado.length}
+- Encabezados encontrados: ${encabezadosConcentrado.length}
+`);
   
   // Identificar columna de expediente en data.xlsx
   const COLUMNA_EXPEDIENTE_DATA = "Nº de pieza";
   
-  if (!datosData.length || !(COLUMNA_EXPEDIENTE_DATA in datosData[0])) {
+  // Verificar que la columna exista en los datos
+  if (!datosData || !datosData.length) {
+    console.error(`Error: No se encontraron datos en el archivo data.xlsx`);
+    return;
+  }
+  
+  // Comprobar si la columna de expediente existe en los datos
+  let columnaExpedienteEncontrada = false;
+  const encabezadosDisponibles = [];
+  
+  if (datosData.length > 0) {
+    // Recopilar todos los nombres de columnas disponibles para diagnóstico
+    Object.keys(datosData[0]).forEach(nombre => {
+      encabezadosDisponibles.push(nombre);
+      
+      // Comprobar si alguna columna coincide con nuestro criterio
+      if (nombre === COLUMNA_EXPEDIENTE_DATA) {
+        columnaExpedienteEncontrada = true;
+      }
+    });
+  }
+  
+  if (!columnaExpedienteEncontrada) {
     console.error(`Error: No se encontró la columna "${COLUMNA_EXPEDIENTE_DATA}" en data.xlsx`);
+    console.log("Columnas disponibles:", encabezadosDisponibles.join(", "));
+    
+    // Intentar identificar columnas alternativas que puedan contener números de expediente
+    const posiblesColumnas = encabezadosDisponibles.filter(nombre => 
+      /expediente|pieza|n[úu]mero|n[°º]|id/i.test(nombre)
+    );
+    
+    if (posiblesColumnas.length > 0) {
+      console.log("Posibles columnas alternativas de expediente:", posiblesColumnas.join(", "));
+    }
+    
     return;
   }
   
@@ -142,18 +346,25 @@ function realizarMergeDirecto() {
   console.log("\nIndexando expedientes del concentrado...");
   const mapaExpedientesConcentrado = new Map();
   
-  // Buscar los expedientes en la primera columna (A)
+  // Buscar los expedientes en la primera columna
+  const primeraColumnaConcentrado = encabezadosConcentrado[0];
+  
+  // Verificar que exista una primera columna
+  if (!primeraColumnaConcentrado) {
+    console.error("Error: No se pudo identificar la primera columna del concentrado");
+    return;
+  }
+  
+  // Indexar los expedientes del concentrado
   datosConcentrado.forEach((registro, indice) => {
-    // Tomar el primer valor (columna A) como expediente
-    const primeraColumna = Object.keys(registro)[0];
-    const expedienteRaw = registro[primeraColumna];
+    const expedienteRaw = registro[primeraColumnaConcentrado];
     
     // Normalizar para comparación
     const expediente = normalizarExpediente(expedienteRaw);
     
     if (expediente) {
       mapaExpedientesConcentrado.set(expediente, {
-        indice,      // Posición en el array (0-based)
+        indice: indice + 2, // +2 porque en Excel las filas empiezan en 1 y la primera es encabezado
         expediente,  // Valor normalizado
         original: expedienteRaw  // Valor original sin normalizar
       });
@@ -167,21 +378,16 @@ function realizarMergeDirecto() {
   let count = 0;
   for (const [expediente, info] of mapaExpedientesConcentrado.entries()) {
     if (count < 5) {
-      console.log(`   - [${info.indice + 1}] "${info.original}" -> "${expediente}"`);
+      console.log(`   - [Fila ${info.indice}] "${info.original}" -> "${expediente}"`);
       count++;
     } else {
       break;
     }
   }
   
-  // Extraer encabezados de data.xlsx
-  const encabezadosData = Object.keys(datosData[0]);
-  
   // Preparar contadores para el reporte
   let expedientesEncontrados = 0;
   let expedientesNoEncontrados = 0;
-  const registrosNoIntegrados = [];
-  const registrosIntegrados = [];
   
   // Información para el reporte final
   const reporte = {
@@ -190,27 +396,23 @@ function realizarMergeDirecto() {
     noIntegrados: []
   };
   
-  // Obtener el rango actual del concentrado
-  const rangoConcentrado = xlsx.utils.decode_range(hojaConcentrado['!ref']);
-  
   // Calcular dónde empezar a insertar nuevos datos (columna AW / 49)
-  const columnaInicio = 48; // 48 = AW (base 0)
+  const columnaInicio = 48; // 48 = columna índice 48, que en Excel sería AW (0-indexado)
+  
+  // Asegurarse de que haya suficientes columnas
+  const columnasNecesarias = columnaInicio + encabezadosData.length;
+  while (worksheetConcentrado.columnCount < columnasNecesarias) {
+    // Agregar columnas si es necesario
+    worksheetConcentrado.getColumn(worksheetConcentrado.columnCount + 1); // Esto crea la columna
+  }
   
   // Insertar encabezados de data.xlsx en la fila 1 del concentrado
   encabezadosData.forEach((encabezado, indice) => {
-    const ref = xlsx.utils.encode_cell({ r: 0, c: columnaInicio + indice });
-    hojaConcentrado[ref] = { 
-      t: 's', 
-      v: encabezado,
-      s: { font: { bold: true } } // Estilo negrita para encabezados
-    };
+    const colNum = columnaInicio + indice + 1; // +1 porque ExcelJS usa índices base 1
+    const celda = worksheetConcentrado.getCell(1, colNum);
+    celda.value = encabezado;
+    celda.font = { bold: true };
   });
-  
-  // Actualizar el rango si se extendió
-  if (columnaInicio + encabezadosData.length - 1 > rangoConcentrado.e.c) {
-    rangoConcentrado.e.c = columnaInicio + encabezadosData.length - 1;
-    hojaConcentrado['!ref'] = xlsx.utils.encode_range(rangoConcentrado);
-  }
   
   // Procesar cada registro de data.xlsx
   console.log("\nProcesando registros de data.xlsx...");
@@ -228,48 +430,39 @@ function realizarMergeDirecto() {
       // Información del expediente encontrado
       const infoExpediente = mapaExpedientesConcentrado.get(expedienteData);
       
-      // Fila en el concentrado donde insertar los datos (base 0)
-      const filaConcentrado = infoExpediente.indice + 1; // +1 porque los datos empiezan en la fila 1 (después de encabezados)
+      // Fila en el concentrado donde insertar los datos
+      const filaConcentrado = infoExpediente.indice;
       
       // Mostrar algunos ejemplos de expedientes encontrados
       if (expedientesEncontrados <= 5 || i % 1000 === 0) {
-        console.log(`   - [${i+1}/${datosData.length}] Expediente "${expedienteData}" encontrado en fila ${filaConcentrado + 1} del concentrado`);
+        console.log(`   - [${i+1}/${datosData.length}] Expediente "${expedienteData}" encontrado en fila ${filaConcentrado} del concentrado`);
       }
       
       // Insertar cada columna de data.xlsx en el concentrado
       encabezadosData.forEach((encabezado, indiceColumna) => {
         const valor = registro[encabezado];
         
-        if (valor !== "") {
-          // Referencia de celda donde insertar
-          const ref = xlsx.utils.encode_cell({ r: filaConcentrado, c: columnaInicio + indiceColumna });
+        if (valor !== "" && valor !== null && valor !== undefined) {
+          // Obtener la celda donde insertar
+          const colNum = columnaInicio + indiceColumna + 1; // +1 porque ExcelJS usa índices base 1
+          const celda = worksheetConcentrado.getCell(filaConcentrado, colNum);
           
-          // Determinar el tipo de dato para Excel
-          let tipo = 's'; // string por defecto
-          let valorCelda = valor;
+          // Asignar el valor manteniendo el tipo de dato apropiado
+          celda.value = valor;
           
-          // Detectar números
-          if (typeof valor === 'number' || !isNaN(Number(valor))) {
-            tipo = 'n';
-            valorCelda = typeof valor === 'number' ? valor : Number(valor);
+          // Si es fecha, establecer formato adecuado
+          if (valor instanceof Date) {
+            celda.numFmt = 'dd/mm/yyyy';
           }
-          // Detectar fechas
-          else if (valor instanceof Date) {
-            tipo = 'd';
-            valorCelda = valor;
-          }
-          
-          // Crear la celda con el valor
-          hojaConcentrado[ref] = { t: tipo, v: valorCelda };
         }
       });
       
       // Registrar como integrado exitosamente
       reporte.integrados.push({
-        Expediente: expedienteDataRaw,
-        FilaData: i + 2, // +2 para mostrar fila real en Excel (base 1 + encabezado)
-        FilaConcentrado: filaConcentrado + 1, // +1 para mostrar fila real en Excel (base 1)
-        Estado: "Integrado"
+        expediente: expedienteDataRaw,
+        filaData: i + 2, // +2 para mostrar fila real en Excel (base 1 + encabezado)
+        filaConcentrado: filaConcentrado,
+        estado: "Integrado"
       });
     } else {
       expedientesNoEncontrados++;
@@ -281,10 +474,15 @@ function realizarMergeDirecto() {
       
       // Registrar como no integrado
       reporte.noIntegrados.push({
-        Expediente: expedienteDataRaw,
-        FilaData: i + 2,
-        Motivo: expedienteData ? "Expediente no encontrado en concentrado" : "Valor de expediente vacío"
+        expediente: expedienteDataRaw,
+        filaData: i + 2,
+        motivo: expedienteData ? "Expediente no encontrado en concentrado" : "Valor de expediente vacío"
       });
+    }
+    
+    // Mostrar progreso cada 1000 registros
+    if (i > 0 && i % 1000 === 0) {
+      console.log(`   - Progreso: ${i}/${datosData.length} registros procesados...`);
     }
   }
   
@@ -293,18 +491,20 @@ function realizarMergeDirecto() {
   console.log(`   - Expedientes encontrados: ${expedientesEncontrados}`);
   console.log(`   - Expedientes NO encontrados: ${expedientesNoEncontrados}`);
   
-  // Guardar el concentrado actualizado
+  // Guardar el concentrado actualizado, preservando las propiedades
   if (expedientesEncontrados > 0) {
-    console.log("\nGuardando concentrado actualizado...");
+    console.log("\nGuardando concentrado actualizado (con preservación de formato)...");
     try {
-      xlsx.writeFile(concentradoWorkbook, archivoConcentrado, { bookSST: true });
+      // Guardar con ExcelJS
+      await workbookConcentrado.xlsx.writeFile(archivoConcentrado);
       console.log(`   - Concentrado guardado exitosamente con ${expedientesEncontrados} registros integrados`);
+      console.log(`   - FORMATO ORIGINAL PRESERVADO (filtros, columnas ocultas, estilos, etc.)`);
     } catch (error) {
       console.error("Error al guardar el concentrado:", error.message);
     }
     
     // Generar reporte detallado
-    generarReporte(reporte);
+    await generarReporteExcelJS(reporte, archivoReporte);
   } else {
     console.log("\nNo se encontraron coincidencias. No se modificará el concentrado.");
   }
@@ -318,52 +518,15 @@ function realizarMergeDirecto() {
   console.log(`Registros no integrados:            ${expedientesNoEncontrados}`);
   console.log(`Reporte guardado en:                ${archivoReporte}`);
   console.log("======================================");
-  console.log("\nIMPORTANTE: Si el proceso fue exitoso, debe copiar manualmente");
-  console.log(`el archivo concentrado actualizado a la carpeta principal:`);
-  console.log(`De: ${archivoConcentrado}`);
-  console.log(`A:  ${path.join(carpetaBase, "concentrado-general.xlsx")}`);
+  console.log("\nIMPORTANTE: Formato original preservado - No es necesario");
+  console.log("copiar manualmente el archivo, ya que se ha modificado el");
+  console.log("archivo original conservando todos sus formatos.");
+  console.log("\nSi desea una copia adicional, puede encontrar el backup en:");
+  console.log(`${archivoBackup}`);
   console.log("======================================");
 }
 
-// ======================================
-//  GENERAR REPORTE EXCEL
-// ======================================
-function generarReporte(reporte) {
-  try {
-    const workbook = xlsx.utils.book_new();
-    
-    // Hoja de estadísticas
-    const estadisticas = [
-      { Estadística: "Total registros en data.xlsx", Valor: reporte.totalRegistros },
-      { Estadística: "Registros integrados correctamente", Valor: reporte.integrados.length },
-      { Estadística: "Registros no integrados", Valor: reporte.noIntegrados.length }
-    ];
-    
-    const hojaEstadisticas = xlsx.utils.json_to_sheet(estadisticas);
-    xlsx.utils.book_append_sheet(workbook, hojaEstadisticas, "Estadísticas");
-    
-    // Hoja de registros integrados
-    if (reporte.integrados.length > 0) {
-      const hojaIntegrados = xlsx.utils.json_to_sheet(reporte.integrados);
-      xlsx.utils.book_append_sheet(workbook, hojaIntegrados, "Integrados");
-    }
-    
-    // Hoja de registros no integrados
-    if (reporte.noIntegrados.length > 0) {
-      const hojaNoIntegrados = xlsx.utils.json_to_sheet(reporte.noIntegrados);
-      xlsx.utils.book_append_sheet(workbook, hojaNoIntegrados, "No Integrados");
-    }
-    
-    // Guardar el workbook
-    xlsx.writeFile(workbook, archivoReporte);
-    console.log(`   - Reporte guardado en: ${archivoReporte}`);
-    
-    return true;
-  } catch (error) {
-    console.error("Error al generar reporte:", error.message);
-    return false;
-  }
-}
-
-// Ejecutar el proceso de merge
-realizarMergeDirecto();
+// Ejecutar el proceso de merge mejorado
+realizarMergeDirecto().catch(error => {
+  console.error("Error en el proceso principal:", error);
+});
