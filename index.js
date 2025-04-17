@@ -1,3 +1,4 @@
+// node index.js
 import fs from "fs";
 import path from "path";
 import xlsx from "xlsx";

@@ -5,10 +5,10 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "merge": "node merge-data-fixed.js",
-    "complete": "node index.js && node merge-data-fixed.js",
-    "diagnostico": "node diagnostico-merge.js",
+    "concentrador": "node index.js",
+    "actualizador": "node index2.js",
+    "merge": "node merge.js",
+    "completo": "node proceso-completo.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
